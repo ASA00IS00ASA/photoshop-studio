@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photoshop Studio</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<svg class="svg-defs" aria-hidden="true">
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M4 4l16 16"/><path d="M9.6 5.9A10.6 10.6 0 0 1 12 5.6c6.4 0 10 6.4 10 6.4a17 17 0 0 1-3.2 3.9M6.2 7.5A17 17 0 0 0 2 12s3.6 6.4 10 6.4a10.9 10.9 0 0 0 4.3-.9"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l2.1 5.6L20 11l-5.9 2.4L12 19l-2.1-5.6L4 11l5.9-2.4L12 3Z"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 8 4 4-4 4"/><path d="M12 16h7"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8.5h3l1.6-2.2h6.8L17 8.5h3v10H4z"/><circle cx="12" cy="13" r="3.2"/></symbol>
+  <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5z"/><path d="M9 4v6h6V4"/><path d="M9 20v-5h6v5"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 4v2.2M12 17.8V20M4 12h2.2M17.8 12H20M6.3 6.3l1.6 1.6M16.1 16.1l1.6 1.6M17.7 6.3l-1.6 1.6M7.9 16.1l-1.6 1.6"/></symbol>
+</svg>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark">PS</span>
+      <div class="brand-text">
+        <h1>Photoshop Studio</h1>
+        <p>本地 Photoshop 控制台</p>
+      </div>
+    </div>
+
+    <div class="status" id="status" data-state="idle">
+      <span class="dot"></span>
+      <span id="statusText">正在连接…</span>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="meta" id="meta">—</div>
+
+    <button class="btn ghost" id="btnRefresh" title="刷新状态、图层与预览">
+      <svg class="ico"><use href="#i-refresh"/></svg>刷新
+    </button>
+    <button class="btn ghost" id="btnSettings" title="模型与接口设置">
+      <svg class="ico"><use href="#i-settings"/></svg>设置
+    </button>
+  </header>
+
+  <main class="layout">
+    <!-- 左栏 -->
+    <aside class="col left">
+      <section class="card">
+        <header class="card-h">
+          <h2>新建画布</h2>
+          <span class="hint">Canvas</span>
+        </header>
+        <div class="card-body">
+          <div class="chips" id="presets"></div>
+          <div class="field-row">
+            <label>宽<input id="docW" type="number" min="1" step="1" value="1200"></label>
+            <label>高<input id="docH" type="number" min="1" step="1" value="800"></label>
+            <label>DPI<input id="docDpi" type="number" min="1" step="1" value="72"></label>
+          </div>
+          <div class="field-row">
+            <label>背景
+              <select id="docBg">
+                <option value="white">白色</option>
+                <option value="transparent">透明</option>
+                <option value="color">纯色</option>
+              </select>
+            </label>
+            <label>颜色<input id="docColor" type="color" value="#0E1726"></label>
+          </div>
+          <button class="btn primary block" id="btnCreate">创建画布</button>
+        </div>
+      </section>
+
+      <section class="card grow">
+        <header class="card-h">
+          <h2>图层</h2>
+          <span class="hint" id="layerCount">0</span>
+        </header>
+        <div class="layer-list" id="layerList">
+          <div class="empty">还没有打开的文档</div>
+        </div>
+      </section>
+    </aside>
+
+    <!-- 中栏 -->
+    <section class="col center">
+      <section class="card preview-card grow">
+        <header class="card-h">
+          <h2 id="docName">预览</h2>
+          <div class="tools">
+            <button class="btn ghost sm" id="btnSnap"><svg class="ico"><use href="#i-camera"/></svg>刷新预览</button>
+            <button class="btn ghost sm" id="btnExportPng">导出 PNG</button>
+            <button class="btn ghost sm" id="btnSavePsd"><svg class="ico"><use href="#i-save"/></svg>保存 PSD</button>
+          </div>
+        </header>
+        <div class="stage" id="stage">
+          <div class="stage-inner">
+            <img id="preview" alt="文档预览" hidden>
+            <div class="stage-empty" id="stageEmpty">
+              <svg class="empty-ico"><use href="#i-camera"/></svg>
+              <p>还没有可预览的文档</p>
+              <span>在左侧创建画布，或让 AI 帮你开始</span>
+            </div>
+          </div>
+        </div>
+        <footer class="doc-meta">
+          <span id="docMeta">—</span>
+          <span class="meta-right" id="snapTime"></span>
+        </footer>
+      </section>
+
+      <section class="card">
+        <header class="card-h">
+          <h2>快捷操作</h2>
+          <span class="hint">Quick actions</span>
+        </header>
+        <div class="card-body">
+          <div class="chips" id="quick"></div>
+        </div>
+      </section>
+    </section>
+
+    <!-- 右栏 -->
+    <aside class="col right">
+      <section class="card grow panel-card">
+        <div class="tabs" role="tablist">
+          <button class="tab" data-tab="chat" aria-selected="true"><svg class="ico"><use href="#i-spark"/></svg>AI 对话</button>
+          <button class="tab" data-tab="tool" aria-selected="false"><svg class="ico"><use href="#i-terminal"/></svg>工具直调</button>
+          <button class="tab" data-tab="log" aria-selected="false">日志</button>
+        </div>
+
+        <div class="tab-body" id="tab-chat">
+          <div class="chat" id="chat">
+            <div class="chat-empty" id="chatEmpty">
+              <p>用一句话描述你要做的图。</p>
+              <ul>
+                <li>新建 1200×800 画布，深色背景，写上标题「夜间模式」</li>
+                <li>画一个蓝色圆，加高斯模糊，导出 PNG 到图片文件夹</li>
+                <li>把当前文档去色并锐化，然后保存 PSD</li>
+              </ul>
+            </div>
+          </div>
+          <div class="chat-input">
+            <textarea id="chatInput" rows="2" placeholder="描述你的设计需求…  (Ctrl+Enter 发送)"></textarea>
+            <button class="btn primary" id="btnChat">发送</button>
+          </div>
+        </div>
+
+        <div class="tab-body hidden" id="tab-tool">
+          <label class="tool-label">工具
+            <select id="toolSelect"></select>
+          </label>
+          <p class="tool-desc" id="toolDesc">—</p>
+          <label class="tool-label">参数 (JSON)
+            <textarea id="toolArgs" rows="10" spellcheck="false"></textarea>
+          </label>
+          <button class="btn primary block" id="btnRunTool">执行</button>
+          <pre class="result" id="toolResult">—</pre>
+        </div>
+
+        <div class="tab-body hidden" id="tab-log">
+          <div class="log" id="log"></div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <div class="toasts" id="toasts"></div>
+  <div class="modal-root" id="modalRoot"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

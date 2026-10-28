@@ -1,0 +1,21 @@
+# 打包产物（exe 请从 GitHub Releases 下载，仓库里不放大文件）
+dist/
+build/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 日志与本地临时文件
+*.log
+studio.log
+Thumbs.db
+.DS_Store
+
+# 编辑器
+.idea/
+.vscode/
