@@ -499,6 +499,22 @@
     return wrap;
   }
 
+  function chatAddThinking(text) {
+    const chars = text.length;
+    const label = "思考过程 · " + chars.toLocaleString("zh-CN") + " 字";
+    return chatAdd(
+      "assistant",
+      `<details class="thinking"><summary>${esc(label)}</summary><div class="thinking-body">${esc(text)}</div></details>`
+    );
+  }
+
+  // 回传历史时只保留模型接口认识的字段：不带回 reasoning（DeepSeek 等会拒绝）
+  function stripAssistant(msg) {
+    const out = { role: "assistant", content: typeof msg.content === "string" ? msg.content : "" };
+    if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) out.tool_calls = msg.tool_calls;
+    return out;
+  }
+
   function typingBubble() {
     const wrap = chatAdd("assistant", '<span class="typing"><i></i><i></i><i></i></span>');
     const box = $("#chat");
@@ -545,8 +561,11 @@
         typing.remove();
 
         const msg = body.message || {};
-        state.messages.push(msg);
+        if (msg.reasoning) chatAddThinking(msg.reasoning);
         if (msg.content) chatAdd("assistant", esc(msg.content));
+        else if (!(msg.tool_calls && msg.tool_calls.length))
+          chatAdd("assistant", '<span class="muted">（这一轮只有思考，没有正文）</span>');
+        state.messages.push(stripAssistant(msg));
 
         const calls = msg.tool_calls || [];
         if (!calls.length) break;
@@ -712,6 +731,9 @@
     $("#snapTime").textContent = "预览 " + stamp();
 
     chatAdd("user", "新建 1200×800 深色画布，画一蓝一橙两个圆环，标题写「夜间模式」，导出 PNG");
+    chatAddThinking(
+      "需求是一张深色夜间海报：1200×800、深蓝底，右侧一蓝一橙两个圆环互相叠压，左侧大标题「夜间模式」+ 一行副标题。\n计划：ps_doc_create 建画布 → ps_shape 画两个椭圆 → ps_text 写标题和副标题 → ps_doc_save 导出 PNG。"
+    );
     chatAdd("assistant", "好的，我先建画布，再依次绘制圆环和标题，最后导出并生成预览图。");
     chatAdd("tool", '<span class="ok">✓</span> ps_doc_create name=night-mode-poster · 1200×800');
     chatAdd("tool", '<span class="ok">✓</span> ps_shape shape=ellipse · 220×220');

@@ -97,6 +97,34 @@ def chat(messages, tools):
     return http_json(BASE_URL + "/chat/completions", payload, headers, timeout=300)
 
 
+def text_of(content):
+    """OpenAI 字符串或 Anthropic 内容块数组 → 纯文本（只取正文块）。"""
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") in ("text", "output_text", "input_text"):
+                parts.append(str(b.get("text") or ""))
+        return "\n".join(p for p in parts if p)
+    return str(content or "")
+
+
+def reasoning_of(msg):
+    """取出思考内容：reasoning_content / reasoning / thinking 块。"""
+    parts = []
+    for key in ("reasoning_content", "reasoning"):
+        val = msg.get(key)
+        if isinstance(val, str) and val.strip():
+            parts.append(val.strip())
+    content = msg.get("content")
+    if isinstance(content, list):
+        for b in content:
+            if isinstance(b, dict) and b.get("type") in ("thinking", "redacted_thinking", "reasoning"):
+                tx = b.get("thinking") or b.get("text")
+                if tx:
+                    parts.append(str(tx))
+    return "\n\n".join(parts)
+
+
 def shrink_tool_result(result):
     """去掉 base64 图片，避免上下文爆炸；保留路径和尺寸。"""
     if isinstance(result, dict) and result.get("data_url"):
@@ -116,12 +144,19 @@ def run_task(task):
 
     for step in range(1, MAX_STEPS + 1):
         resp = chat(messages, tools)
-        msg = resp["choices"][0]["message"]
-        messages.append(msg)
+        msg = resp["choices"][0].get("message") or {}
+        think = reasoning_of(msg)
+        if think:
+            print("思考：\n" + think + "\n")
+        # 只回传标准字段：reasoning_content 等不该进上下文，部分服务端会直接 400
+        clean = {k: msg[k] for k in ("role", "content", "tool_calls") if k in msg}
+        if clean.get("content") is None:
+            clean["content"] = ""
+        messages.append(clean)
 
         calls = msg.get("tool_calls") or []
         if not calls:
-            print("模型最终答复：\n%s" % (msg.get("content") or "").strip())
+            print("模型最终答复：\n%s" % text_of(msg.get("content")).strip())
             return 0
 
         for call in calls:

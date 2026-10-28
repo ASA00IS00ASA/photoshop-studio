@@ -108,6 +108,9 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 * 关闭窗口即停止内置服务；服务只监听 `127.0.0.1` 的随机端口。
 * 「设置」里的模型接口地址 / API Key 存在本机 WebView2 配置目录里，重启后不用重新填。
 * 启动时如果 Photoshop 没开，程序会自动把它拉起来（约 10~20 秒）；连接完成后 Studio 窗口会自动回到前台。
+* **思考过程折叠显示**：模型返回的 `reasoning_content` / `reasoning` / `thinking` 块会显示成「思考过程 · N 字」折叠块，默认收起，点开可看（最高 240px，可滚动），不挤占正文。
+
+![思考过程折叠块](screenshot-thinking.png)
 
 ## 4. 接口速查
 
@@ -195,6 +198,24 @@ LangChain / LlamaIndex / Dify / n8n / Coze 都可以走这个 HTTP 接口，不�
 snap = call("ps_snapshot", {"max_size": 1024})
 img = {"type": "image_url", "image_url": {"url": snap["data_url"]}}
 ```
+
+### 思考过程与 Anthropic 内容块
+
+GUI 的 `/llm/chat` 代理不挑上游协议，两种返回都能接：
+
+* **OpenAI 兼容**（DeepSeek / GPT / vLLM…）：从 `choices[0].message` 读；`reasoning_content`、`reasoning`，以及 content 数组里的 `reasoning` 块都会抽成 `message.reasoning`，正文仍是 `message.content`，工具调用仍是 `message.tool_calls`。
+* **Anthropic 风格**：直接返回 `{content: [{type:"thinking"}, {type:"text"}, {type:"tool_use"}]}` 也认——`thinking` → `reasoning`，`text` → `content`，`tool_use` → `tool_calls`（`input` 自动转成 JSON 字符串）。
+
+界面回传历史时如果是 Anthropic 内容块数组，会先转成 OpenAI 能吃的形状：
+
+| Anthropic 块 | 转换结果 |
+| --- | --- |
+| `text` / `output_text` / `input_text` | 合并进字符串 `content` |
+| `image`（base64） | `image_url` data URI |
+| `tool_use` | assistant 消息的 `tool_calls` |
+| `tool_result` | 单独的 `role: "tool"` 消息（带 `tool_call_id`） |
+
+`reasoning` / `thinking` 只在界面上展示（折叠块），**不会回传给上游**——DeepSeek 等服务端收到这些字段会直接 400。
 
 ## 7. `/jsx`：做不到的就写脚本
 

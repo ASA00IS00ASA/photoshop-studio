@@ -585,6 +585,42 @@ select {
 
 .msg.assistant .bubble { background: linear-gradient(180deg, #131C29, #0F1620); }
 
+/* 思考过程：可折叠，默认收起，不抢正文视线 */
+.bubble details.thinking {
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: rgba(148, 163, 184, 0.05);
+}
+
+.bubble details.thinking summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  color: var(--text-2);
+  list-style: none;
+  user-select: none;
+}
+
+.bubble details.thinking summary::-webkit-details-marker { display: none; }
+.bubble details.thinking summary::before { content: "▸ "; color: var(--muted); }
+.bubble details.thinking[open] summary::before { content: "▾ "; }
+.bubble details.thinking[open] summary { margin-bottom: 7px; }
+
+.bubble details.thinking .thinking-body {
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.muted { color: var(--muted); }
+
 .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
 .typing i {
   width: 5px; height: 5px; border-radius: 50%; background: var(--muted);

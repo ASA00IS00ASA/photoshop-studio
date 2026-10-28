@@ -69,7 +69,7 @@ except ImportError:  # 允许在没有 pywin32 的机器上查看 --help
     pythoncom = pywintypes = win32com = None
     HAS_COM = False
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 START_TS = time.time()
 TEMP_DIR = os.path.join(tempfile.gettempdir(), "photoshop_api")
 os.makedirs(TEMP_DIR, exist_ok=True)

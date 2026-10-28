@@ -156,6 +156,181 @@ MIME = {
 }
 
 
+# ---------------------------------------------------------------------------
+# 模型消息归一化：兼容 OpenAI 字符串 / Anthropic 内容块数组 / 各种思考字段
+# ---------------------------------------------------------------------------
+def _blocks_text(blocks, include_thinking=False):
+    """内容块数组 → 纯文本。默认只取正文；include_thinking=True 时把思考块也拼进来。"""
+    parts = []
+    for b in blocks or []:
+        if isinstance(b, str):
+            parts.append(b)
+            continue
+        if not isinstance(b, dict):
+            continue
+        t = b.get("type")
+        if t in ("text", "output_text", "input_text"):
+            parts.append(str(b.get("text") or ""))
+        elif include_thinking and t in ("thinking", "redacted_thinking", "reasoning"):
+            tx = b.get("thinking") or b.get("text")
+            if tx:
+                parts.append(str(tx))
+    return "\n".join(p for p in parts if p)
+
+
+def message_text(content):
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return _blocks_text(content)
+    return str(content)
+
+
+def split_reasoning(message):
+    """从 assistant 消息里抽出思考内容：reasoning_content / reasoning / thinking 块。"""
+    parts = []
+    for key in ("reasoning_content", "reasoning"):
+        val = message.get(key)
+        if isinstance(val, str) and val.strip():
+            parts.append(val.strip())
+        elif isinstance(val, list):
+            txt = _blocks_text(val, include_thinking=True)
+            if txt:
+                parts.append(txt)
+    content = message.get("content")
+    if isinstance(content, list):
+        for b in content:
+            if isinstance(b, dict) and b.get("type") in ("thinking", "redacted_thinking", "reasoning"):
+                tx = b.get("thinking") or b.get("text")
+                if tx:
+                    parts.append(str(tx))
+    return "\n\n".join(p for p in parts if p)
+
+
+def _tool_calls_from_blocks(blocks):
+    """Anthropic 的 tool_use 块 / OpenAI 的 tool_call 块 → OpenAI tool_calls。"""
+    calls = []
+    for i, b in enumerate(blocks or []):
+        if not isinstance(b, dict) or b.get("type") not in ("tool_use", "tool_call"):
+            continue
+        name = b.get("name") or ""
+        args = b.get("input")
+        if args is None:
+            args = b.get("arguments") or {}
+        if isinstance(args, str):
+            try:
+                json.loads(args)
+                arg_text = args
+            except ValueError:
+                arg_text = json.dumps({"__raw": args}, ensure_ascii=False)
+        else:
+            arg_text = json.dumps(args, ensure_ascii=False)
+        calls.append({
+            "id": b.get("id") or ("call_%d" % i),
+            "type": "function",
+            "function": {"name": name, "arguments": arg_text},
+        })
+    return calls
+
+
+def to_openai_messages(messages):
+    """把历史消息转成 OpenAI chat/completions 能吃的形状。
+
+    * content 是 Anthropic 风格数组时：text 块拼成文本，image 块转 image_url；
+    * 数组里的 tool_use 块 → assistant.tool_calls；
+    * 数组里的 tool_result 块 → 单独的 role=tool 消息；
+    * 顺手剥掉 reasoning_content / thinking 等字段（多数服务端不接受回传）。
+    """
+    out = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role") or "user"
+        content = m.get("content")
+        blocks = content if isinstance(content, list) else None
+
+        if blocks and role in ("user", "assistant"):
+            pending_tool_results = []
+            rest = []
+            for b in blocks:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    pending_tool_results.append(b)
+                else:
+                    rest.append(b)
+            for tr in pending_tool_results:
+                out.append({
+                    "role": "tool",
+                    "tool_call_id": tr.get("tool_use_id") or tr.get("id") or "",
+                    "content": message_text(tr.get("content")),
+                })
+            blocks = rest
+            if pending_tool_results and not blocks:
+                continue  # 这一条只是 tool_result 的容器，已经转成 role=tool，不再追加空消息
+
+        msg = {"role": role}
+        tool_calls = m.get("tool_calls")
+        if blocks is not None:
+            if role == "assistant" and not tool_calls:
+                tool_calls = _tool_calls_from_blocks(blocks)
+            has_image = any(isinstance(b, dict) and b.get("type") in ("image", "image_url") for b in blocks)
+            if has_image:
+                parts = []
+                for b in blocks:
+                    if not isinstance(b, dict):
+                        continue
+                    t = b.get("type")
+                    if t in ("text", "output_text", "input_text"):
+                        parts.append({"type": "text", "text": str(b.get("text") or "")})
+                    elif t == "image":
+                        src = b.get("source") or {}
+                        if src.get("type") == "base64" and src.get("data"):
+                            media = src.get("media_type") or "image/png"
+                            parts.append({"type": "image_url", "image_url": {"url": "data:%s;base64,%s" % (media, src["data"])}})
+                    elif t == "image_url":
+                        parts.append(b)
+                msg["content"] = parts
+            else:
+                msg["content"] = _blocks_text(blocks)
+        else:
+            msg["content"] = content
+
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
+            if msg.get("content") is None:
+                msg["content"] = ""
+        for key in ("tool_call_id", "name"):
+            if key in m:
+                msg[key] = m[key]
+        out.append(msg)
+    return out
+
+
+def normalize_reply(body):
+    """把上游响应统一成 {role, content: str, reasoning?: str, tool_calls?: [...]}。
+
+    支持 OpenAI 的 choices[].message、裸 message、以及 Anthropic 风格的 {content:[blocks]}。
+    """
+    if isinstance(body, dict) and body.get("choices"):
+        message = body["choices"][0].get("message") or {}
+    else:
+        message = body if isinstance(body, dict) else {}
+    content = message.get("content")
+    reply = {"role": message.get("role") or "assistant", "content": message_text(content)}
+    reasoning = split_reasoning(message)
+    if reasoning:
+        reply["reasoning"] = reasoning
+    calls = message.get("tool_calls") or []
+    if not calls and isinstance(content, list):
+        calls = _tool_calls_from_blocks(content)
+    if calls:
+        reply["tool_calls"] = calls
+    if content is None:
+        reply["content"] = ""
+    return reply
+
+
 class StudioHandler(psapi.APIHandler):
     server_version = "PhotoshopStudio/" + psapi.VERSION
 
@@ -211,7 +386,8 @@ class StudioHandler(psapi.APIHandler):
             return self._send(400, {"ok": False, "error": "未配置 API Key（右上角「设置」）"})
         payload = {
             "model": data.get("model") or "gpt-4o-mini",
-            "messages": data.get("messages") or [],
+            # 历史消息可能是 Anthropic 风格的内容块数组，先转成 OpenAI 兼容形状
+            "messages": to_openai_messages(data.get("messages") or []),
             "temperature": 0,
         }
         tools = data.get("tools") or []
@@ -244,8 +420,10 @@ class StudioHandler(psapi.APIHandler):
             return self._send(502, {"ok": False, "error": "无法访问模型接口：%s" % exc})
 
         try:
-            message = body["choices"][0]["message"]
+            message = normalize_reply(body)
         except Exception:  # noqa: BLE001
+            return self._send(502, {"ok": False, "error": "模型返回结构异常：%s" % str(body)[:400]})
+        if not message.get("content") and not message.get("tool_calls") and not message.get("reasoning"):
             return self._send(502, {"ok": False, "error": "模型返回结构异常：%s" % str(body)[:400]})
         return self._send(200, {"ok": True, "message": message, "usage": body.get("usage")})
 
