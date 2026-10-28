@@ -61,7 +61,7 @@ python photoshop_api.py                # ② 启动 API 服务，默认 http://1
 
 ```
 ==============================================================
- Photoshop API 1.0.0   http://127.0.0.1:8765
+ Photoshop API 1.1.1   http://127.0.0.1:8765
    GET  http://127.0.0.1:8765/tools     模型工具清单
    POST http://127.0.0.1:8765/call      {"name", "arguments"}
    POST http://127.0.0.1:8765/jsx       原始 ExtendScript
@@ -216,6 +216,17 @@ GUI 的 `/llm/chat` 代理不挑上游协议，两种返回都能接：
 | `tool_result` | 单独的 `role: "tool"` 消息（带 `tool_call_id`） |
 
 `reasoning` / `thinking` 只在界面上展示（折叠块），**不会回传给上游**——DeepSeek 等服务端收到这些字段会直接 400。
+
+### 上下文保护（长对话不会 400）
+
+`ps_snapshot` 会返回几 MB 的 base64，原样回传会瞬间撑爆上下文（`maximum context length … 3939266 tokens`）。GUI 的 `/llm/chat` 在转发前做四件事：
+
+* 剔除工具结果里的 `image_base64` / `data_url`，只留落盘 `path` 和一句 `note`；
+* 单条工具结果截断到 12000 字符；
+* 整个历史按 30 万字符预算从最旧开始丢，并保证裁剪点落在 `user` / `system` 上，不会留下没有 `tool_calls` 的孤立 `role:"tool"` 消息；
+* 上游仍报上下文超长时，自动换成 8 万字符预算再重试一次；还不行才提示关窗重开（界面上的对话不会丢）。
+
+`model_client_example.py` 里的 `shrink_tool_result()` 是同一套做法的精简版，自己写 Agent 循环时照抄即可。
 
 ## 7. `/jsx`：做不到的就写脚本
 

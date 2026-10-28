@@ -307,6 +307,76 @@ def to_openai_messages(messages):
     return out
 
 
+# 历史压缩：ps_snapshot 之类工具结果带几 MB base64，原样回传必爆上下文（HTTP 400）
+MAX_TOOL_CHARS = 12000       # 单条工具/用户结果最多回传多少字符
+MAX_HISTORY_CHARS = 300000   # 首轮历史预算（中文约 1 字符 1 token，留足余量）
+RETRY_HISTORY_CHARS = 80000  # 上游报上下文超长后，用更小预算重试一次
+_B64_KEYS = ("image_base64", "data_url")
+
+
+def is_context_error(detail):
+    """上游 400/413 且提示上下文超长 → 值得精简历史重试。"""
+    low = (detail or "").lower()
+    return any(s in low for s in ("context length", "context_length", "maximum context",
+                                  "too many tokens", "prompt is too long", "context window"))
+
+
+def shrink_payload(value):
+    """递归剔除 base64 图片数据（ps_snapshot 的 image_base64 / data_url）。"""
+    if isinstance(value, dict):
+        dropped = any(k in _B64_KEYS and isinstance(v, str) for k, v in value.items())
+        out = {k: shrink_payload(v) for k, v in value.items()
+               if not (k in _B64_KEYS and isinstance(v, str))}
+        if dropped and "note" not in out:
+            out["note"] = "预览图未回传给模型，文件在 path 里"
+        return out
+    if isinstance(value, list):
+        return [shrink_payload(v) for v in value]
+    return value
+
+
+def slim_content(content, limit=MAX_TOOL_CHARS):
+    """工具结果是 JSON 文本时去掉 base64；任何超长内容截断。"""
+    if not isinstance(content, str):
+        return content
+    text = content
+    if content.lstrip()[:1] in ("{", "["):
+        try:
+            text = json.dumps(shrink_payload(json.loads(content)), ensure_ascii=False)
+        except ValueError:
+            pass
+    return text if len(text) <= limit else text[:limit] + " …(已截断)"
+
+
+def compact_messages(messages, budget=MAX_HISTORY_CHARS):
+    """压缩历史：剔 base64、截断超长结果，再按字符预算丢掉最旧的消息。
+
+    裁掉 assistant 的 tool_calls 后不能留下孤立的 role=tool（上游会 400），
+    所以裁剪点要落在 user/system 上。
+    """
+    msgs = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        m = dict(m)
+        m["content"] = slim_content(m.get("content"))
+        msgs.append(m)
+
+    used, start = 0, len(msgs)
+    while start > 0:
+        cost = len(json.dumps(msgs[start - 1], ensure_ascii=False))
+        if used + cost > budget:
+            break
+        used += cost
+        start -= 1
+    if start > 0:
+        start = next((i for i in range(start, len(msgs))
+                      if msgs[i].get("role") in ("user", "system")), start)
+        while start < len(msgs) and msgs[start].get("role") == "tool":
+            start += 1
+    return msgs[start:] or msgs[-1:]
+
+
 def normalize_reply(body):
     """把上游响应统一成 {role, content: str, reasoning?: str, tool_calls?: [...]}。
 
@@ -384,10 +454,9 @@ class StudioHandler(psapi.APIHandler):
         key = str(data.get("api_key") or "")
         if not key:
             return self._send(400, {"ok": False, "error": "未配置 API Key（右上角「设置」）"})
+        history = data.get("messages") or []
         payload = {
             "model": data.get("model") or "gpt-4o-mini",
-            # 历史消息可能是 Anthropic 风格的内容块数组，先转成 OpenAI 兼容形状
-            "messages": to_openai_messages(data.get("messages") or []),
             "temperature": 0,
         }
         tools = data.get("tools") or []
@@ -404,20 +473,29 @@ class StudioHandler(psapi.APIHandler):
                 payload["tool_choice"] = "auto"
 
         url = base if base.endswith("/chat/completions") else base + "/chat/completions"
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": "Bearer " + key},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=180) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:600]
-            return self._send(502, {"ok": False, "error": "模型接口 HTTP %s：%s" % (exc.code, detail)})
-        except Exception as exc:  # noqa: BLE001
-            return self._send(502, {"ok": False, "error": "无法访问模型接口：%s" % exc})
+        # 先按正常预算压缩历史；上游报上下文超长时再用小预算重试一次
+        body = None
+        for budget in (MAX_HISTORY_CHARS, RETRY_HISTORY_CHARS):
+            payload["messages"] = to_openai_messages(compact_messages(history, budget))
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Authorization": "Bearer " + key},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=180) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", "replace")[:600]
+                too_long = is_context_error(detail)
+                if not too_long or budget == RETRY_HISTORY_CHARS:
+                    hint = "（对话历史已自动精简仍超长，请关闭窗口重开清空对话）" if too_long else ""
+                    return self._send(502, {"ok": False,
+                                            "error": "模型接口 HTTP %s：%s%s" % (exc.code, detail, hint)})
+            except Exception as exc:  # noqa: BLE001
+                return self._send(502, {"ok": False, "error": "无法访问模型接口：%s" % exc})
 
         try:
             message = normalize_reply(body)
