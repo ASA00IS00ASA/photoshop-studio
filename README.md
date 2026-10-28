@@ -279,7 +279,7 @@ photoshop-api/
 └── selftest-preview.png      # python photoshop_api.py --selftest 的产物
 ```
 
-## 12. English
+## English
 
 **Photoshop Studio** exposes a local Adobe Photoshop installation as a JSON-over-HTTP tool API
 (COM + ExtendScript; no plugin, no debug port), and ships a double-clickable Windows desktop console
@@ -300,6 +300,6 @@ or `pip install -r requirements.txt && python gui_app.py`.
 
 Not affiliated with Adobe. Tested with Photoshop 2026 (27.0) on Windows 11.
 
-## 13. License
+## License
 
 MIT — see [LICENSE](LICENSE).
